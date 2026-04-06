@@ -10,16 +10,21 @@ const Message = require('./models/Message');
 
 const app = express();
 const server = http.createServer(app);
+const ALLOWED_ORIGINS = [
+  'http://localhost:3000',
+  process.env.FRONTEND_URL,
+].filter(Boolean);
+
 const io = new Server(server, {
   cors: {
-    origin: 'http://localhost:3000',
+    origin: ALLOWED_ORIGINS,
     methods: ['GET', 'POST'],
   },
 });
 
 const translate = new Translate({ key: process.env.GOOGLE_TRANSLATE_API_KEY });
 
-app.use(cors({ origin: 'http://localhost:3000' }));
+app.use(cors({ origin: ALLOWED_ORIGINS }));
 app.use(express.json());
 
 // Connect to MongoDB
@@ -33,6 +38,16 @@ async function translateText(text, targetLanguage) {
   const [translation] = await translate.translate(text, targetLanguage);
   return translation;
 }
+
+// POST verify PIN
+app.post('/api/verify-pin', (req, res) => {
+  const { pin } = req.body;
+  if (pin === process.env.SESSION_PIN) {
+    res.json({ success: true });
+  } else {
+    res.status(401).json({ success: false });
+  }
+});
 
 // GET all messages
 app.get('/api/messages', async (req, res) => {

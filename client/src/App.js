@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
 
-const socket = io('http://localhost:3001');
+const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3001';
+const socket = io(API_URL);
 
 const UI = {
   Gabe: {
@@ -34,6 +35,11 @@ const UI = {
 const UI_DEFAULT = UI.Gabe;
 
 export default function App() {
+  const cachedPin = localStorage.getItem('pinVerifiedAt');
+  const pinStillValid = cachedPin && Date.now() - Number(cachedPin) < 24 * 60 * 60 * 1000;
+  const [pinVerified, setPinVerified] = useState(!!pinStillValid);
+  const [pinInput, setPinInput] = useState('');
+  const [pinError, setPinError] = useState(false);
   const [user, setUser] = useState(null); // 'Polly' | 'Gabe'
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
@@ -54,7 +60,7 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     const load = () => {
-      fetch('/api/messages')
+      fetch(`${API_URL}/api/messages`)
         .then((res) => {
           if (!res.ok) throw new Error();
           return res.json();
@@ -114,6 +120,27 @@ export default function App() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  const submitPin = async (e) => {
+    e.preventDefault();
+    try {
+      const res = await fetch(`${API_URL}/api/verify-pin`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin: pinInput }),
+      });
+      if (res.ok) {
+        localStorage.setItem('pinVerifiedAt', Date.now().toString());
+        setPinVerified(true);
+        setPinError(false);
+      } else {
+        setPinError(true);
+        setPinInput('');
+      }
+    } catch {
+      setPinError(true);
+    }
+  };
+
   const handleInputChange = (e) => {
     setInputText(e.target.value);
 
@@ -141,6 +168,36 @@ export default function App() {
   const getDisplayText = (msg) => {
     return user === 'Polly' ? msg.russianText : msg.englishText;
   };
+
+  if (!pinVerified) {
+    return (
+      <div style={styles.selectScreen}>
+        <div style={styles.selectCard}>
+          <h1 style={styles.title}>Enter PIN</h1>
+          <p style={styles.subtitle}>Enter the 4-digit PIN to continue</p>
+          <form onSubmit={submitPin} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
+            <input
+              type="password"
+              inputMode="numeric"
+              maxLength={4}
+              value={pinInput}
+              onChange={(e) => { setPinInput(e.target.value.replace(/\D/g, '')); setPinError(false); }}
+              placeholder="••••"
+              style={{
+                ...styles.pinInput,
+                borderColor: pinError ? '#ef4444' : '#2a2a36',
+              }}
+              autoFocus
+            />
+            {pinError && <p style={styles.pinError}>Incorrect PIN. Try again.</p>}
+            <button type="submit" style={styles.pinBtn} disabled={pinInput.length !== 4}>
+              Unlock
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
 
   if (!user) {
     return (
@@ -319,6 +376,33 @@ export default function App() {
 
 const styles = {
   // User selection screen
+  pinInput: {
+    width: 120,
+    padding: '14px 0',
+    textAlign: 'center',
+    fontSize: 28,
+    letterSpacing: 12,
+    borderRadius: 12,
+    border: '1px solid #2a2a36',
+    background: '#0f0f13',
+    color: '#f0f0f5',
+    outline: 'none',
+  },
+  pinError: {
+    margin: 0,
+    color: '#ef4444',
+    fontSize: 13,
+  },
+  pinBtn: {
+    padding: '12px 40px',
+    borderRadius: 12,
+    border: 'none',
+    background: '#1a56db',
+    color: '#fff',
+    fontWeight: 700,
+    fontSize: 15,
+    cursor: 'pointer',
+  },
   selectScreen: {
     display: 'flex',
     alignItems: 'center',
