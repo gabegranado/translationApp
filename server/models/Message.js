@@ -10,8 +10,8 @@ const messageSchema = new mongoose.Schema({
     type: String,
     default: '',
   },
-  imageUrl: {
-    type: String,
+  imageData: {
+    type: String, // base64 data URI
     default: null,
   },
   russianText: {

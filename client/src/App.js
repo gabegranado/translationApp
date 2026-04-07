@@ -6,8 +6,8 @@ const socket = io(API_URL);
 
 const UI = {
   Gabe: {
-    welcomeTitle: 'Welcome to the Chat',
-    selectPrompt: 'Who are you?',
+    welcomeTitle: 'Добро пожаловать в чат',
+    selectPrompt: 'Кто ты?',
     pollyLang: '🇷🇺 Russian',
     gabeLang: '🇺🇸 English',
     viewingAs: '🇺🇸 Viewing in English',
@@ -94,8 +94,8 @@ export default function App() {
       fetch(`${API_URL}/api/profile/${name}`)
         .then((res) => res.json())
         .then((data) => {
-          if (data.imageUrl) {
-            setProfileImages((prev) => ({ ...prev, [name]: `${API_URL}${data.imageUrl}` }));
+          if (data.imageData) {
+            setProfileImages((prev) => ({ ...prev, [name]: data.imageData }));
           }
         })
         .catch(() => {});
@@ -178,14 +178,23 @@ export default function App() {
     }
   };
 
+  const fileToBase64 = (file) => new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.readAsDataURL(file);
+  });
+
   const uploadProfileImage = async (file, userName) => {
-    const formData = new FormData();
-    formData.append('image', file);
     try {
-      const res = await fetch(`${API_URL}/api/profile/${userName}`, { method: 'POST', body: formData });
+      const imageData = await fileToBase64(file);
+      const res = await fetch(`${API_URL}/api/profile/${userName}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imageData }),
+      });
       const data = await res.json();
-      if (data.imageUrl) {
-        setProfileImages((prev) => ({ ...prev, [userName]: `${API_URL}${data.imageUrl}` }));
+      if (data.imageData) {
+        setProfileImages((prev) => ({ ...prev, [userName]: data.imageData }));
       }
     } catch {}
   };
@@ -205,23 +214,14 @@ export default function App() {
     clearTimeout(typingTimeoutRef.current);
     socket.emit('stopTyping');
 
-    let imageUrl = null;
+    let imageData = null;
     if (pendingImage) {
-      const formData = new FormData();
-      formData.append('image', pendingImage.file);
-      try {
-        const res = await fetch(`${API_URL}/api/upload-message-image`, { method: 'POST', body: formData });
-        const data = await res.json();
-        imageUrl = data.imageUrl;
-      } catch {
-        setError('Failed to upload image');
-        return;
-      }
+      imageData = await fileToBase64(pendingImage.file);
       URL.revokeObjectURL(pendingImage.preview);
       setPendingImage(null);
     }
 
-    socket.emit('sendMessage', { sender: user, text: inputText.trim(), imageUrl, replyTo: replyingTo?._id || null });
+    socket.emit('sendMessage', { sender: user, text: inputText.trim(), imageData, replyTo: replyingTo?._id || null });
     setInputText('');
     setReplyingTo(null);
     setError(null);
@@ -453,17 +453,17 @@ export default function App() {
                     <div style={styles.replyQuote}>
                       <span style={styles.replyQuoteSender}>{msg.replyTo.sender}</span>
                       <span style={styles.replyQuoteText}>
-                        {msg.replyTo.imageUrl && '📷 '}
-                        {getDisplayText(msg.replyTo) || (msg.replyTo.imageUrl ? 'Image' : '')}
+                        {msg.replyTo.imageData && '📷 '}
+                        {getDisplayText(msg.replyTo) || (msg.replyTo.imageData ? 'Image' : '')}
                       </span>
                     </div>
                   )}
-                  {msg.imageUrl && (
+                  {msg.imageData && (
                     <img
-                      src={`${API_URL}${msg.imageUrl}`}
+                      src={msg.imageData}
                       alt="attachment"
                       style={styles.messageImage}
-                      onClick={() => window.open(`${API_URL}${msg.imageUrl}`, '_blank')}
+                      onClick={() => window.open(msg.imageData, '_blank')}
                     />
                   )}
                   {getDisplayText(msg) && (
@@ -520,8 +520,8 @@ export default function App() {
           <div style={styles.replyPreviewContent}>
             <span style={styles.replyPreviewSender}>{replyingTo.sender}</span>
             <span style={styles.replyPreviewText}>
-              {replyingTo.imageUrl && '📷 '}
-              {getDisplayText(replyingTo) || (replyingTo.imageUrl ? 'Image' : '')}
+              {replyingTo.imageData && '📷 '}
+              {getDisplayText(replyingTo) || (replyingTo.imageData ? 'Image' : '')}
             </span>
           </div>
           <button

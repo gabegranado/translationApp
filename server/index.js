@@ -1,34 +1,13 @@
 require('dotenv').config();
 const express = require('express');
 const http = require('http');
-const path = require('path');
 const { Server } = require('socket.io');
 const mongoose = require('mongoose');
 const cors = require('cors');
-const multer = require('multer');
 const { Translate } = require('@google-cloud/translate').v2;
 
 const Message = require('./models/Message');
-
-// Multer config for profile images
-const profileStorage = multer.diskStorage({
-  destination: path.join(__dirname, 'uploads/profiles'),
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    cb(null, `${req.params.user}${ext}`);
-  },
-});
-const uploadProfile = multer({ storage: profileStorage, limits: { fileSize: 5 * 1024 * 1024 } });
-
-// Multer config for message images
-const messageStorage = multer.diskStorage({
-  destination: path.join(__dirname, 'uploads/messages'),
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    cb(null, `${Date.now()}-${Math.round(Math.random() * 1e6)}${ext}`);
-  },
-});
-const uploadMessage = multer({ storage: messageStorage, limits: { fileSize: 10 * 1024 * 1024 } });
+const Profile = require('./models/Profile');
 
 const app = express();
 const server = http.createServer(app);
@@ -42,13 +21,13 @@ const io = new Server(server, {
     origin: ALLOWED_ORIGINS,
     methods: ['GET', 'POST'],
   },
+  maxHttpBufferSize: 10 * 1024 * 1024, // 10MB for base64 images
 });
 
 const translate = new Translate({ key: process.env.GOOGLE_TRANSLATE_API_KEY });
 
 app.use(cors({ origin: ALLOWED_ORIGINS }));
-app.use(express.json());
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use(express.json({ limit: '10mb' }));
 
 // Connect to MongoDB
 mongoose
@@ -72,30 +51,30 @@ app.post('/api/verify-pin', (req, res) => {
   }
 });
 
-// POST upload profile image
-app.post('/api/profile/:user', uploadProfile.single('image'), (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-  const imageUrl = `/uploads/profiles/${req.file.filename}`;
-  res.json({ imageUrl });
-});
-
-// GET profile image URL (checks if one exists)
-app.get('/api/profile/:user', (req, res) => {
-  const fs = require('fs');
-  const dir = path.join(__dirname, 'uploads/profiles');
-  const files = fs.readdirSync(dir).filter(f => f.startsWith(req.params.user + '.'));
-  if (files.length > 0) {
-    res.json({ imageUrl: `/uploads/profiles/${files[files.length - 1]}` });
-  } else {
-    res.json({ imageUrl: null });
+// POST upload profile image (base64)
+app.post('/api/profile/:user', async (req, res) => {
+  const { imageData } = req.body;
+  if (!imageData) return res.status(400).json({ error: 'No image data' });
+  try {
+    await Profile.findOneAndUpdate(
+      { user: req.params.user },
+      { imageData },
+      { upsert: true }
+    );
+    res.json({ imageData });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to save profile image' });
   }
 });
 
-// POST upload message image
-app.post('/api/upload-message-image', uploadMessage.single('image'), (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-  const imageUrl = `/uploads/messages/${req.file.filename}`;
-  res.json({ imageUrl });
+// GET profile image
+app.get('/api/profile/:user', async (req, res) => {
+  try {
+    const profile = await Profile.findOne({ user: req.params.user }).lean();
+    res.json({ imageData: profile?.imageData || null });
+  } catch {
+    res.json({ imageData: null });
+  }
 });
 
 // GET all messages
@@ -112,7 +91,7 @@ app.get('/api/messages', async (req, res) => {
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
 
-  socket.on('sendMessage', async ({ sender, text, imageUrl, replyTo }) => {
+  socket.on('sendMessage', async ({ sender, text, imageData, replyTo }) => {
     try {
       let englishText = '', russianText = '';
 
@@ -131,7 +110,7 @@ io.on('connection', (socket) => {
         originalText: text || '',
         russianText,
         englishText,
-        imageUrl: imageUrl || null,
+        imageData: imageData || null,
         replyTo: replyTo || null,
       });
 
