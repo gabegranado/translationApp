@@ -53,11 +53,15 @@ export default function App() {
   const [replyingTo, setReplyingTo] = useState(null); // message object
   const [onlineStatus, setOnlineStatus] = useState({ Polly: false, Gabe: false });
   const [loadingMessages, setLoadingMessages] = useState(true);
+  const [stickers, setStickers] = useState([]);
+  const [stickerPickerOpen, setStickerPickerOpen] = useState(false);
+  const [fallingStickers, setFallingStickers] = useState([]);
   const messagesEndRef = useRef(null);
   const typingTimeoutRef = useRef(null);
   const imageInputRef = useRef(null);
   const profileInputRef = useRef(null);
   const textInputRef = useRef(null);
+  const stickerUploadRef = useRef(null);
 
 
   const EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🔥'];
@@ -105,10 +109,21 @@ export default function App() {
     });
   }, []);
 
+  // Load stickers
+  useEffect(() => {
+    fetch(`${API_URL}/api/stickers`)
+      .then((res) => res.json())
+      .then((data) => setStickers(data))
+      .catch(() => {});
+  }, []);
+
   // Listen for new messages via socket
   useEffect(() => {
     socket.on('newMessage', (message) => {
       setMessages((prev) => [...prev, message]);
+      if (message.stickerData) {
+        triggerFallingStickers(message.stickerData);
+      }
     });
 
     socket.on('error', ({ message }) => {
@@ -266,6 +281,42 @@ export default function App() {
     setError(null);
   };
 
+  const triggerFallingStickers = (stickerSrc) => {
+    const newStickers = Array.from({ length: 15 }, (_, i) => ({
+      id: Date.now() + i,
+      src: stickerSrc,
+      left: Math.random() * 100,
+      delay: Math.random() * 2,
+      size: 30 + Math.random() * 30,
+      duration: 2 + Math.random() * 1.5,
+    }));
+    setFallingStickers((prev) => [...prev, ...newStickers]);
+    setTimeout(() => {
+      setFallingStickers((prev) => prev.filter((s) => !newStickers.find((n) => n.id === s.id)));
+    }, 4000);
+  };
+
+  const sendSticker = (stickerSrc) => {
+    if (!user) return;
+    socket.emit('sendMessage', { sender: user, text: '', stickerData: stickerSrc, replyTo: replyingTo?._id || null });
+    setReplyingTo(null);
+    setStickerPickerOpen(false);
+    triggerFallingStickers(stickerSrc);
+  };
+
+  const uploadCustomSticker = async (file) => {
+    const imageData = await fileToBase64(file);
+    try {
+      const res = await fetch(`${API_URL}/api/stickers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: file.name, imageData, uploadedBy: user || 'system' }),
+      });
+      const sticker = await res.json();
+      setStickers((prev) => [...prev, sticker]);
+    } catch {}
+  };
+
   // Return the display text based on the current user's language
   const getDisplayText = (msg) => {
     return user === 'Polly' ? msg.russianText : msg.englishText;
@@ -387,6 +438,11 @@ export default function App() {
         @keyframes spin {
           to { transform: rotate(360deg); }
         }
+        @keyframes stickerFall {
+          0% { transform: translateY(0) rotate(0deg); opacity: 1; }
+          80% { opacity: 1; }
+          100% { transform: translateY(110vh) rotate(360deg); opacity: 0; }
+        }
       `}</style>
       {/* Header */}
       <div style={styles.header}>
@@ -507,6 +563,7 @@ export default function App() {
                   style={{
                     ...styles.messageBubble,
                     ...(isOwn ? styles.ownBubble : styles.otherBubble),
+                    ...(msg.stickerData ? styles.stickerBubble : {}),
                   }}
                 >
                   <span style={styles.senderName}>{msg.sender}</span>
@@ -515,9 +572,13 @@ export default function App() {
                       <span style={styles.replyQuoteSender}>{msg.replyTo.sender}</span>
                       <span style={styles.replyQuoteText}>
                         {msg.replyTo.imageData && '📷 '}
-                        {getDisplayText(msg.replyTo) || (msg.replyTo.imageData ? 'Image' : '')}
+                        {msg.replyTo.stickerData && 'Sticker '}
+                        {getDisplayText(msg.replyTo) || (msg.replyTo.imageData ? 'Image' : msg.replyTo.stickerData ? '' : '')}
                       </span>
                     </div>
+                  )}
+                  {msg.stickerData && (
+                    <img src={msg.stickerData} alt="sticker" style={styles.stickerInMessage} />
                   )}
                   {msg.imageData && (
                     <img
@@ -614,6 +675,45 @@ export default function App() {
         </div>
       )}
 
+      {/* Sticker picker */}
+      {stickerPickerOpen && (
+        <div style={styles.stickerPicker}>
+          <div style={styles.stickerPickerHeader}>
+            <span style={styles.stickerPickerTitle}>Stickers</span>
+            <button
+              style={styles.stickerPickerClose}
+              onClick={() => setStickerPickerOpen(false)}
+            >
+              ✕
+            </button>
+          </div>
+          <div style={styles.stickerGrid}>
+            {stickers.map((s) => (
+              <button
+                key={s._id}
+                style={styles.stickerGridItem}
+                onClick={() => sendSticker(s.imageData)}
+                title={s.name}
+              >
+                <img src={s.imageData} alt={s.name} style={styles.stickerGridImg} />
+              </button>
+            ))}
+            <button
+              style={styles.stickerAddBtn}
+              onClick={() => stickerUploadRef.current.click()}
+              title="Add sticker"
+            >
+              +
+            </button>
+          </div>
+          {stickers.length === 0 && (
+            <p style={{ color: '#555', fontSize: 13, textAlign: 'center', margin: '8px 0' }}>
+              No stickers yet. Click + to add some!
+            </p>
+          )}
+        </div>
+      )}
+
       {/* Input */}
       <form style={styles.inputRow} onSubmit={sendMessage}>
         <input
@@ -623,6 +723,17 @@ export default function App() {
           style={{ display: 'none' }}
           onChange={handleImageAttach}
         />
+        <input
+          type="file"
+          accept="image/*"
+          ref={stickerUploadRef}
+          style={{ display: 'none' }}
+          onChange={(e) => {
+            const file = e.target.files[0];
+            if (file) uploadCustomSticker(file);
+            e.target.value = '';
+          }}
+        />
         <button
           type="button"
           style={styles.attachBtn}
@@ -630,6 +741,22 @@ export default function App() {
           title="Attach image"
         >
           📎
+        </button>
+        <button
+          type="button"
+          style={{
+            ...styles.attachBtn,
+            ...(stickerPickerOpen ? { background: 'rgba(255,255,255,0.12)' } : {}),
+          }}
+          onClick={() => setStickerPickerOpen((o) => !o)}
+          title="Stickers"
+        >
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#aaa" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 2a10 10 0 1 0 10 10h-10V2z" />
+            <path d="M12 2a10 10 0 0 1 10 10" />
+            <path d="M12 12l10 0" />
+            <path d="M12 2v10" />
+          </svg>
         </button>
         <input
           ref={textInputRef}
@@ -644,6 +771,29 @@ export default function App() {
           {t.send}
         </button>
       </form>
+
+      {/* Falling stickers animation */}
+      {fallingStickers.length > 0 && (
+        <div style={styles.fallingOverlay}>
+          {fallingStickers.map((s) => (
+            <img
+              key={s.id}
+              src={s.src}
+              alt=""
+              style={{
+                position: 'absolute',
+                left: `${s.left}%`,
+                top: -60,
+                width: s.size,
+                height: s.size,
+                objectFit: 'contain',
+                animation: `stickerFall ${s.duration}s ${s.delay}s ease-in forwards`,
+                pointerEvents: 'none',
+              }}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -1188,5 +1338,91 @@ const styles = {
   loadingText: {
     color: '#555',
     fontSize: 14,
+  },
+
+  // Sticker in message bubble
+  stickerBubble: {
+    background: 'transparent',
+    boxShadow: 'none',
+    padding: '4px 8px',
+  },
+  stickerInMessage: {
+    width: 150,
+    height: 150,
+    objectFit: 'contain',
+  },
+
+  // Sticker picker panel
+  stickerPicker: {
+    background: '#1c1c24',
+    borderTop: '1px solid #2a2a36',
+    padding: '12px 16px',
+    maxHeight: 250,
+    overflowY: 'auto',
+  },
+  stickerPickerHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  stickerPickerTitle: {
+    fontSize: 13,
+    fontWeight: 700,
+    color: '#888',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  stickerPickerClose: {
+    background: 'none',
+    border: 'none',
+    color: '#888',
+    fontSize: 16,
+    cursor: 'pointer',
+  },
+  stickerGrid: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  stickerGridItem: {
+    background: '#2a2a36',
+    border: '1px solid #3a3a4a',
+    borderRadius: 10,
+    padding: 6,
+    cursor: 'pointer',
+    width: 72,
+    height: 72,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stickerGridImg: {
+    width: '100%',
+    height: '100%',
+    objectFit: 'contain',
+  },
+  stickerAddBtn: {
+    background: '#2a2a36',
+    border: '2px dashed #3a3a4a',
+    borderRadius: 10,
+    width: 72,
+    height: 72,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    cursor: 'pointer',
+    color: '#888',
+    fontSize: 28,
+    fontWeight: 300,
+  },
+
+  // Falling stickers overlay
+  fallingOverlay: {
+    position: 'fixed',
+    inset: 0,
+    pointerEvents: 'none',
+    zIndex: 9999,
+    overflow: 'hidden',
   },
 };

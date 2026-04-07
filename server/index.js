@@ -8,6 +8,7 @@ const { Translate } = require('@google-cloud/translate').v2;
 
 const Message = require('./models/Message');
 const Profile = require('./models/Profile');
+const Sticker = require('./models/Sticker');
 
 const app = express();
 const server = http.createServer(app);
@@ -77,6 +78,39 @@ app.get('/api/profile/:user', async (req, res) => {
   }
 });
 
+// GET all stickers
+app.get('/api/stickers', async (req, res) => {
+  try {
+    const stickers = await Sticker.find().sort({ createdAt: 1 }).lean();
+    res.json(stickers);
+  } catch {
+    res.json([]);
+  }
+});
+
+// POST upload a custom sticker
+app.post('/api/stickers', async (req, res) => {
+  const { name, imageData, uploadedBy } = req.body;
+  if (!imageData) return res.status(400).json({ error: 'No image data' });
+  try {
+    const sticker = new Sticker({ name: name || 'Custom', imageData, uploadedBy: uploadedBy || 'system' });
+    await sticker.save();
+    res.json(sticker);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to save sticker' });
+  }
+});
+
+// DELETE a sticker
+app.delete('/api/stickers/:id', async (req, res) => {
+  try {
+    await Sticker.findByIdAndDelete(req.params.id);
+    res.json({ success: true });
+  } catch {
+    res.status(500).json({ error: 'Failed to delete sticker' });
+  }
+});
+
 // GET all messages
 app.get('/api/messages', async (req, res) => {
   try {
@@ -111,7 +145,7 @@ io.on('connection', (socket) => {
     io.emit('onlineStatus', getOnlineNames());
   });
 
-  socket.on('sendMessage', async ({ sender, text, imageData, replyTo }) => {
+  socket.on('sendMessage', async ({ sender, text, imageData, stickerData, replyTo }) => {
     try {
       let englishText = '', russianText = '';
 
@@ -131,6 +165,7 @@ io.on('connection', (socket) => {
         russianText,
         englishText,
         imageData: imageData || null,
+        stickerData: stickerData || null,
         replyTo: replyTo || null,
         readBy: [sender],
       });

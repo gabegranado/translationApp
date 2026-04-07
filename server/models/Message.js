@@ -14,6 +14,10 @@ const messageSchema = new mongoose.Schema({
     type: String, // base64 data URI
     default: null,
   },
+  stickerData: {
+    type: String, // base64 data URI for sticker
+    default: null,
+  },
   russianText: {
     type: String,
     default: '',
