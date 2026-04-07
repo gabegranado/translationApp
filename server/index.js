@@ -87,9 +87,29 @@ app.get('/api/messages', async (req, res) => {
   }
 });
 
+// Track online users: socketId -> userName
+const onlineUsers = new Map();
+
+function getOnlineNames() {
+  const names = new Set(onlineUsers.values());
+  return { Polly: names.has('Polly'), Gabe: names.has('Gabe') };
+}
+
 // Socket.io real-time messaging
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
+
+  // When a user identifies themselves
+  socket.on('setUser', (userName) => {
+    onlineUsers.set(socket.id, userName);
+    io.emit('onlineStatus', getOnlineNames());
+  });
+
+  // When a user logs out / switches user
+  socket.on('clearUser', () => {
+    onlineUsers.delete(socket.id);
+    io.emit('onlineStatus', getOnlineNames());
+  });
 
   socket.on('sendMessage', async ({ sender, text, imageData, replyTo }) => {
     try {
@@ -112,6 +132,7 @@ io.on('connection', (socket) => {
         englishText,
         imageData: imageData || null,
         replyTo: replyTo || null,
+        readBy: [sender],
       });
 
       await message.save();
@@ -162,6 +183,18 @@ io.on('connection', (socket) => {
     }
   });
 
+  socket.on('markRead', async ({ messageIds, reader }) => {
+    try {
+      await Message.updateMany(
+        { _id: { $in: messageIds }, readBy: { $ne: reader } },
+        { $addToSet: { readBy: reader } }
+      );
+      io.emit('messagesRead', { messageIds, reader });
+    } catch (err) {
+      console.error('Error marking messages read:', err);
+    }
+  });
+
   socket.on('typing', ({ sender }) => {
     socket.broadcast.emit('userTyping', { sender });
   });
@@ -171,6 +204,8 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
+    onlineUsers.delete(socket.id);
+    io.emit('onlineStatus', getOnlineNames());
     socket.broadcast.emit('userStopTyping');
     console.log('Client disconnected:', socket.id);
   });

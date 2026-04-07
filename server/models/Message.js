@@ -31,6 +31,10 @@ const messageSchema = new mongoose.Schema({
     type: Date,
     default: Date.now,
   },
+  readBy: {
+    type: [String], // ['Polly', 'Gabe']
+    default: [],
+  },
   reactions: {
     type: Map,
     of: [String], // emoji -> [senderNames who reacted]

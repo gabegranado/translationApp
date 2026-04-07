@@ -51,6 +51,8 @@ export default function App() {
   const [profileImages, setProfileImages] = useState({ Polly: null, Gabe: null });
   const [pendingImage, setPendingImage] = useState(null); // { file, preview }
   const [replyingTo, setReplyingTo] = useState(null); // message object
+  const [onlineStatus, setOnlineStatus] = useState({ Polly: false, Gabe: false });
+  const [loadingMessages, setLoadingMessages] = useState(true);
   const messagesEndRef = useRef(null);
   const typingTimeoutRef = useRef(null);
   const imageInputRef = useRef(null);
@@ -75,6 +77,7 @@ export default function App() {
           if (!cancelled) {
             setMessages(data);
             setError(null);
+            setLoadingMessages(false);
           }
         })
         .catch(() => {
@@ -130,6 +133,20 @@ export default function App() {
       setMessages((prev) => prev.filter((m) => m._id !== messageId));
     });
 
+    socket.on('onlineStatus', (status) => {
+      setOnlineStatus(status);
+    });
+
+    socket.on('messagesRead', ({ messageIds, reader }) => {
+      setMessages((prev) =>
+        prev.map((m) =>
+          messageIds.includes(m._id) && !m.readBy?.includes(reader)
+            ? { ...m, readBy: [...(m.readBy || []), reader] }
+            : m
+        )
+      );
+    });
+
     return () => {
       socket.off('newMessage');
       socket.off('error');
@@ -137,8 +154,30 @@ export default function App() {
       socket.off('userStopTyping');
       socket.off('messageReacted');
       socket.off('messageDeleted');
+      socket.off('onlineStatus');
+      socket.off('messagesRead');
     };
   }, []);
+
+  // Tell server who we are when user is selected
+  useEffect(() => {
+    if (user) {
+      socket.emit('setUser', user);
+    } else {
+      socket.emit('clearUser');
+    }
+  }, [user]);
+
+  // Mark unread messages as read when viewing them
+  useEffect(() => {
+    if (!user || messages.length === 0) return;
+    const unread = messages.filter(
+      (m) => m.sender !== user && !(m.readBy || []).includes(user)
+    );
+    if (unread.length > 0) {
+      socket.emit('markRead', { messageIds: unread.map((m) => m._id), reader: user });
+    }
+  }, [user, messages]);
 
   // Auto-scroll to bottom when messages update
   useEffect(() => {
@@ -286,23 +325,30 @@ export default function App() {
           <div style={styles.buttonRow}>
             {['Polly', 'Gabe'].map((name) => (
               <div key={name} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
-                <div
-                  className="profile-avatar"
-                  style={{
-                    ...styles.profileAvatarLarge,
-                    ...(name === 'Polly' ? styles.pollyAvatarBorder : styles.gabeAvatarBorder),
-                  }}
-                  onClick={(e) => { e.stopPropagation(); profileInputRef.current.dataset.user = name; profileInputRef.current.click(); }}
-                  title="Click to change profile picture"
-                >
-                  {profileImages[name] ? (
-                    <img src={profileImages[name]} alt={name} style={styles.profileImg} />
-                  ) : (
-                    <span style={styles.profileInitial}>{name[0]}</span>
-                  )}
-                  <div className="profile-overlay" style={styles.profileOverlay}>
-                    <span style={{ fontSize: 18 }}>📷</span>
+                <div style={{ position: 'relative', display: 'inline-block' }}>
+                  <div
+                    className="profile-avatar"
+                    style={{
+                      ...styles.profileAvatarLarge,
+                      ...(name === 'Polly' ? styles.pollyAvatarBorder : styles.gabeAvatarBorder),
+                    }}
+                    onClick={(e) => { e.stopPropagation(); profileInputRef.current.dataset.user = name; profileInputRef.current.click(); }}
+                    title="Click to change profile picture"
+                  >
+                    {profileImages[name] ? (
+                      <img src={profileImages[name]} alt={name} style={styles.profileImg} />
+                    ) : (
+                      <span style={styles.profileInitial}>{name[0]}</span>
+                    )}
+                    <div className="profile-overlay" style={styles.profileOverlay}>
+                      <span style={{ fontSize: 18 }}>📷</span>
+                    </div>
                   </div>
+                  <span style={{
+                    ...styles.onlineDot,
+                    ...(onlineStatus[name] ? styles.onlineDotActive : styles.onlineDotInactive),
+                    width: 16, height: 16, bottom: 2, right: 2,
+                  }} />
                 </div>
                 <button
                   style={{
@@ -338,6 +384,9 @@ export default function App() {
         }
         .typing-dot:nth-child(2) { animation-delay: 200ms; }
         .typing-dot:nth-child(3) { animation-delay: 400ms; }
+        @keyframes spin {
+          to { transform: rotate(360deg); }
+        }
       `}</style>
       {/* Header */}
       <div style={styles.header}>
@@ -370,7 +419,13 @@ export default function App() {
 
       {/* Messages */}
       <div style={styles.messagesContainer}>
-        {messages.length === 0 && (
+        {loadingMessages && (
+          <div style={styles.loadingContainer}>
+            <div style={styles.loadingSpinner} />
+            <p style={styles.loadingText}>{user === 'Polly' ? 'Загрузка сообщений...' : 'Loading messages...'}</p>
+          </div>
+        )}
+        {!loadingMessages && messages.length === 0 && (
           <p style={styles.emptyState}>{t.noMessages}</p>
         )}
         {messages.map((msg) => {
@@ -433,12 +488,18 @@ export default function App() {
               )}
               {/* Avatar for other user's messages */}
               {!isOwn && (
-                <div style={styles.messageAvatar}>
-                  {profileImages[msg.sender] ? (
-                    <img src={profileImages[msg.sender]} alt={msg.sender} style={styles.messageAvatarImg} />
-                  ) : (
-                    <span style={styles.messageAvatarInitial}>{msg.sender[0]}</span>
-                  )}
+                <div style={{ position: 'relative', alignSelf: 'flex-end', marginRight: 8, flexShrink: 0 }}>
+                  <div style={styles.messageAvatar}>
+                    {profileImages[msg.sender] ? (
+                      <img src={profileImages[msg.sender]} alt={msg.sender} style={styles.messageAvatarImg} />
+                    ) : (
+                      <span style={styles.messageAvatarInitial}>{msg.sender[0]}</span>
+                    )}
+                  </div>
+                  <span style={{
+                    ...styles.onlineDot,
+                    ...(onlineStatus[msg.sender] ? styles.onlineDotActive : styles.onlineDotInactive),
+                  }} />
                 </div>
               )}
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: isOwn ? 'flex-end' : 'flex-start' }}>
@@ -474,6 +535,13 @@ export default function App() {
                       hour: '2-digit',
                       minute: '2-digit',
                     })}
+                    {isOwn && (
+                      <span style={styles.readReceipt}>
+                        {(msg.readBy || []).includes(msg.sender === 'Gabe' ? 'Polly' : 'Gabe')
+                          ? '✓✓'
+                          : '✓'}
+                      </span>
+                    )}
                   </span>
                 </div>
                 {reactionEntries.length > 0 && (
@@ -950,9 +1018,6 @@ const styles = {
     alignItems: 'center',
     justifyContent: 'center',
     background: '#2a2a36',
-    flexShrink: 0,
-    alignSelf: 'flex-end',
-    marginRight: 8,
   },
   messageAvatarImg: {
     width: '100%',
@@ -1076,5 +1141,52 @@ const styles = {
     cursor: 'pointer',
     padding: '4px 8px',
     flexShrink: 0,
+  },
+
+  // Online status dot
+  onlineDot: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    width: 10,
+    height: 10,
+    borderRadius: '50%',
+    border: '2px solid #1c1c24',
+  },
+  onlineDotActive: {
+    background: '#22c55e',
+  },
+  onlineDotInactive: {
+    background: 'transparent',
+    border: '2px solid #555',
+  },
+
+  // Read receipts
+  readReceipt: {
+    marginLeft: 4,
+    fontSize: 11,
+    letterSpacing: -2,
+  },
+
+  // Loading messages
+  loadingContainer: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 60,
+    gap: 12,
+  },
+  loadingSpinner: {
+    width: 32,
+    height: 32,
+    border: '3px solid #2a2a36',
+    borderTopColor: '#1a56db',
+    borderRadius: '50%',
+    animation: 'spin 0.8s linear infinite',
+  },
+  loadingText: {
+    color: '#555',
+    fontSize: 14,
   },
 };
