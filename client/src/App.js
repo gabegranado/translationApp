@@ -48,8 +48,12 @@ export default function App() {
   const [hoveredMessageId, setHoveredMessageId] = useState(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [fontSize, setFontSize] = useState(15);
+  const [profileImages, setProfileImages] = useState({ Polly: null, Gabe: null });
+  const [pendingImage, setPendingImage] = useState(null); // { file, preview }
   const messagesEndRef = useRef(null);
   const typingTimeoutRef = useRef(null);
+  const imageInputRef = useRef(null);
+  const profileInputRef = useRef(null);
 
 
   const EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🔥'];
@@ -80,6 +84,20 @@ export default function App() {
     };
     load();
     return () => { cancelled = true; };
+  }, []);
+
+  // Load profile images
+  useEffect(() => {
+    ['Polly', 'Gabe'].forEach((name) => {
+      fetch(`${API_URL}/api/profile/${name}`)
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.imageUrl) {
+            setProfileImages((prev) => ({ ...prev, [name]: `${API_URL}${data.imageUrl}` }));
+          }
+        })
+        .catch(() => {});
+    });
   }, []);
 
   // Listen for new messages via socket
@@ -153,13 +171,50 @@ export default function App() {
     }
   };
 
-  const sendMessage = (e) => {
+  const uploadProfileImage = async (file, userName) => {
+    const formData = new FormData();
+    formData.append('image', file);
+    try {
+      const res = await fetch(`${API_URL}/api/profile/${userName}`, { method: 'POST', body: formData });
+      const data = await res.json();
+      if (data.imageUrl) {
+        setProfileImages((prev) => ({ ...prev, [userName]: `${API_URL}${data.imageUrl}` }));
+      }
+    } catch {}
+  };
+
+  const handleImageAttach = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const preview = URL.createObjectURL(file);
+    setPendingImage({ file, preview });
+    e.target.value = '';
+  };
+
+  const sendMessage = async (e) => {
     e.preventDefault();
-    if (!inputText.trim() || !user) return;
+    if ((!inputText.trim() && !pendingImage) || !user) return;
 
     clearTimeout(typingTimeoutRef.current);
     socket.emit('stopTyping');
-    socket.emit('sendMessage', { sender: user, text: inputText.trim() });
+
+    let imageUrl = null;
+    if (pendingImage) {
+      const formData = new FormData();
+      formData.append('image', pendingImage.file);
+      try {
+        const res = await fetch(`${API_URL}/api/upload-message-image`, { method: 'POST', body: formData });
+        const data = await res.json();
+        imageUrl = data.imageUrl;
+      } catch {
+        setError('Failed to upload image');
+        return;
+      }
+      URL.revokeObjectURL(pendingImage.preview);
+      setPendingImage(null);
+    }
+
+    socket.emit('sendMessage', { sender: user, text: inputText.trim(), imageUrl });
     setInputText('');
     setError(null);
   };
@@ -202,18 +257,59 @@ export default function App() {
   if (!user) {
     return (
       <div style={styles.selectScreen}>
+        <style>{`
+          .profile-avatar:hover .profile-overlay { opacity: 1 !important; }
+        `}</style>
+        <input
+          type="file"
+          accept="image/*"
+          ref={profileInputRef}
+          style={{ display: 'none' }}
+          onChange={(e) => {
+            const file = e.target.files[0];
+            const targetUser = profileInputRef.current.dataset.user;
+            if (file && targetUser) uploadProfileImage(file, targetUser);
+            e.target.value = '';
+          }}
+        />
         <div style={styles.selectCard}>
           <h1 style={styles.title}>{UI_DEFAULT.welcomeTitle}</h1>
           <p style={styles.subtitle}>{UI_DEFAULT.selectPrompt}</p>
           <div style={styles.buttonRow}>
-            <button style={{ ...styles.userButton, ...styles.pollyButton }} onClick={() => setUser('Polly')}>
-              Polly
-              <span style={styles.langTag}>{UI_DEFAULT.pollyLang}</span>
-            </button>
-            <button style={{ ...styles.userButton, ...styles.gabeButton }} onClick={() => setUser('Gabe')}>
-              Gabe
-              <span style={styles.langTag}>{UI_DEFAULT.gabeLang}</span>
-            </button>
+            {['Polly', 'Gabe'].map((name) => (
+              <div key={name} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+                <div
+                  className="profile-avatar"
+                  style={{
+                    ...styles.profileAvatarLarge,
+                    ...(name === 'Polly' ? styles.pollyAvatarBorder : styles.gabeAvatarBorder),
+                  }}
+                  onClick={(e) => { e.stopPropagation(); profileInputRef.current.dataset.user = name; profileInputRef.current.click(); }}
+                  title="Click to change profile picture"
+                >
+                  {profileImages[name] ? (
+                    <img src={profileImages[name]} alt={name} style={styles.profileImg} />
+                  ) : (
+                    <span style={styles.profileInitial}>{name[0]}</span>
+                  )}
+                  <div className="profile-overlay" style={styles.profileOverlay}>
+                    <span style={{ fontSize: 18 }}>📷</span>
+                  </div>
+                </div>
+                <button
+                  style={{
+                    ...styles.userButton,
+                    ...(name === 'Polly' ? styles.pollyButton : styles.gabeButton),
+                  }}
+                  onClick={() => setUser(name)}
+                >
+                  {name}
+                  <span style={styles.langTag}>
+                    {name === 'Polly' ? UI_DEFAULT.pollyLang : UI_DEFAULT.gabeLang}
+                  </span>
+                </button>
+              </div>
+            ))}
           </div>
         </div>
       </div>
@@ -302,6 +398,16 @@ export default function App() {
                   ))}
                 </div>
               )}
+              {/* Avatar for other user's messages */}
+              {!isOwn && (
+                <div style={styles.messageAvatar}>
+                  {profileImages[msg.sender] ? (
+                    <img src={profileImages[msg.sender]} alt={msg.sender} style={styles.messageAvatarImg} />
+                  ) : (
+                    <span style={styles.messageAvatarInitial}>{msg.sender[0]}</span>
+                  )}
+                </div>
+              )}
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: isOwn ? 'flex-end' : 'flex-start' }}>
                 <div
                   style={{
@@ -310,7 +416,17 @@ export default function App() {
                   }}
                 >
                   <span style={styles.senderName}>{msg.sender}</span>
-                  <p style={{ ...styles.messageText, fontSize }}>{getDisplayText(msg)}</p>
+                  {msg.imageUrl && (
+                    <img
+                      src={`${API_URL}${msg.imageUrl}`}
+                      alt="attachment"
+                      style={styles.messageImage}
+                      onClick={() => window.open(`${API_URL}${msg.imageUrl}`, '_blank')}
+                    />
+                  )}
+                  {getDisplayText(msg) && (
+                    <p style={{ ...styles.messageText, fontSize }}>{getDisplayText(msg)}</p>
+                  )}
                   <span style={styles.timestamp}>
                     {new Date(msg.timestamp).toLocaleTimeString([], {
                       hour: '2-digit',
@@ -356,8 +472,36 @@ export default function App() {
       {/* Error */}
       {error && <div style={styles.errorBar}>{error}</div>}
 
+      {/* Image preview */}
+      {pendingImage && (
+        <div style={styles.imagePreviewBar}>
+          <img src={pendingImage.preview} alt="preview" style={styles.imagePreviewThumb} />
+          <button
+            style={styles.imagePreviewRemove}
+            onClick={() => { URL.revokeObjectURL(pendingImage.preview); setPendingImage(null); }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Input */}
       <form style={styles.inputRow} onSubmit={sendMessage}>
+        <input
+          type="file"
+          accept="image/*"
+          ref={imageInputRef}
+          style={{ display: 'none' }}
+          onChange={handleImageAttach}
+        />
+        <button
+          type="button"
+          style={styles.attachBtn}
+          onClick={() => imageInputRef.current.click()}
+          title="Attach image"
+        >
+          📎
+        </button>
         <input
           style={styles.input}
           type="text"
@@ -366,7 +510,7 @@ export default function App() {
           placeholder={t.inputPlaceholder}
           dir="auto"
         />
-        <button type="submit" style={styles.sendButton} disabled={!inputText.trim()}>
+        <button type="submit" style={styles.sendButton} disabled={!inputText.trim() && !pendingImage}>
           {t.send}
         </button>
       </form>
@@ -656,5 +800,120 @@ const styles = {
     fontWeight: 700,
     fontSize: 15,
     cursor: 'pointer',
+  },
+
+  // Profile avatars on select screen
+  profileAvatarLarge: {
+    width: 80,
+    height: 80,
+    borderRadius: '50%',
+    overflow: 'hidden',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    cursor: 'pointer',
+    position: 'relative',
+    background: '#2a2a36',
+    border: '3px solid transparent',
+  },
+  pollyAvatarBorder: {
+    borderColor: '#cc0000',
+  },
+  gabeAvatarBorder: {
+    borderColor: '#1a56db',
+  },
+  profileImg: {
+    width: '100%',
+    height: '100%',
+    objectFit: 'cover',
+  },
+  profileInitial: {
+    fontSize: 32,
+    fontWeight: 700,
+    color: '#888',
+  },
+  profileOverlay: {
+    position: 'absolute',
+    inset: 0,
+    background: 'rgba(0,0,0,0.5)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    opacity: 0,
+    transition: 'opacity 0.2s',
+    borderRadius: '50%',
+  },
+
+  // Message avatars
+  messageAvatar: {
+    width: 32,
+    height: 32,
+    borderRadius: '50%',
+    overflow: 'hidden',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: '#2a2a36',
+    flexShrink: 0,
+    alignSelf: 'flex-end',
+    marginRight: 8,
+  },
+  messageAvatarImg: {
+    width: '100%',
+    height: '100%',
+    objectFit: 'cover',
+  },
+  messageAvatarInitial: {
+    fontSize: 14,
+    fontWeight: 700,
+    color: '#888',
+  },
+
+  // Message image attachments
+  messageImage: {
+    maxWidth: '100%',
+    maxHeight: 300,
+    borderRadius: 8,
+    marginTop: 4,
+    cursor: 'pointer',
+    objectFit: 'contain',
+  },
+
+  // Image attachment UI
+  attachBtn: {
+    background: 'none',
+    border: 'none',
+    fontSize: 22,
+    cursor: 'pointer',
+    padding: '4px 8px',
+    borderRadius: 8,
+    lineHeight: 1,
+  },
+  imagePreviewBar: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    padding: '8px 16px',
+    background: '#1c1c24',
+    borderTop: '1px solid #2a2a36',
+  },
+  imagePreviewThumb: {
+    height: 60,
+    maxWidth: 120,
+    borderRadius: 8,
+    objectFit: 'cover',
+  },
+  imagePreviewRemove: {
+    background: 'rgba(255,255,255,0.1)',
+    border: 'none',
+    color: '#ccc',
+    fontSize: 16,
+    cursor: 'pointer',
+    borderRadius: '50%',
+    width: 24,
+    height: 24,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 };

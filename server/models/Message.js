@@ -8,15 +8,19 @@ const messageSchema = new mongoose.Schema({
   },
   originalText: {
     type: String,
-    required: true,
+    default: '',
+  },
+  imageUrl: {
+    type: String,
+    default: null,
   },
   russianText: {
     type: String,
-    required: true,
+    default: '',
   },
   englishText: {
     type: String,
-    required: true,
+    default: '',
   },
   timestamp: {
     type: Date,
