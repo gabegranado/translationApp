@@ -8,7 +8,8 @@
     "dev": "nodemon server/index.js",
     "client": "cd client && npm start",
     "build": "cd client && npm run build",
-    "dev:full": "concurrently \"npm run dev\" \"npm run client\""
+    "dev:full": "concurrently \"npm run dev\" \"npm run client\"",
+    "transcript": "node server/transcript.js"
   },
   "dependencies": {
     "@google-cloud/translate": "^8.3.0",

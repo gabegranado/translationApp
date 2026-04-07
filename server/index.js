@@ -101,7 +101,7 @@ app.post('/api/upload-message-image', uploadMessage.single('image'), (req, res) 
 // GET all messages
 app.get('/api/messages', async (req, res) => {
   try {
-    const messages = await Message.find().sort({ timestamp: 1 }).lean();
+    const messages = await Message.find().sort({ timestamp: 1 }).populate('replyTo').lean();
     res.json(messages);
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch messages' });
@@ -112,7 +112,7 @@ app.get('/api/messages', async (req, res) => {
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
 
-  socket.on('sendMessage', async ({ sender, text, imageUrl }) => {
+  socket.on('sendMessage', async ({ sender, text, imageUrl, replyTo }) => {
     try {
       let englishText = '', russianText = '';
 
@@ -132,9 +132,11 @@ io.on('connection', (socket) => {
         russianText,
         englishText,
         imageUrl: imageUrl || null,
+        replyTo: replyTo || null,
       });
 
       await message.save();
+      await message.populate('replyTo');
 
       io.emit('newMessage', message);
     } catch (err) {
@@ -169,6 +171,15 @@ io.on('connection', (socket) => {
       });
     } catch (err) {
       console.error('Error reacting to message:', err);
+    }
+  });
+
+  socket.on('deleteMessage', async ({ messageId }) => {
+    try {
+      await Message.findByIdAndDelete(messageId);
+      io.emit('messageDeleted', { messageId });
+    } catch (err) {
+      console.error('Error deleting message:', err);
     }
   });
 

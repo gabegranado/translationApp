@@ -50,10 +50,12 @@ export default function App() {
   const [fontSize, setFontSize] = useState(15);
   const [profileImages, setProfileImages] = useState({ Polly: null, Gabe: null });
   const [pendingImage, setPendingImage] = useState(null); // { file, preview }
+  const [replyingTo, setReplyingTo] = useState(null); // message object
   const messagesEndRef = useRef(null);
   const typingTimeoutRef = useRef(null);
   const imageInputRef = useRef(null);
   const profileInputRef = useRef(null);
+  const textInputRef = useRef(null);
 
 
   const EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🔥'];
@@ -124,12 +126,17 @@ export default function App() {
       );
     });
 
+    socket.on('messageDeleted', ({ messageId }) => {
+      setMessages((prev) => prev.filter((m) => m._id !== messageId));
+    });
+
     return () => {
       socket.off('newMessage');
       socket.off('error');
       socket.off('userTyping');
       socket.off('userStopTyping');
       socket.off('messageReacted');
+      socket.off('messageDeleted');
     };
   }, []);
 
@@ -214,8 +221,9 @@ export default function App() {
       setPendingImage(null);
     }
 
-    socket.emit('sendMessage', { sender: user, text: inputText.trim(), imageUrl });
+    socket.emit('sendMessage', { sender: user, text: inputText.trim(), imageUrl, replyTo: replyingTo?._id || null });
     setInputText('');
+    setReplyingTo(null);
     setError(null);
   };
 
@@ -379,23 +387,48 @@ export default function App() {
               onMouseEnter={() => setHoveredMessageId(msg._id)}
               onMouseLeave={() => setHoveredMessageId(null)}
             >
-              {/* Emoji picker — left side for own messages, right side for others */}
+              {/* Hover actions — emoji picker + reply */}
               {hoveredMessageId === msg._id && user && (
                 <div style={{
-                  ...styles.emojiPicker,
+                  ...styles.hoverActions,
                   order: isOwn ? -1 : 1,
                   marginRight: isOwn ? 8 : 0,
                   marginLeft: isOwn ? 0 : 8,
                 }}>
-                  {EMOJIS.map((emoji) => (
-                    <button
-                      key={emoji}
-                      style={styles.emojiBtn}
-                      onClick={() => socket.emit('reactToMessage', { messageId: msg._id, emoji, sender: user })}
-                    >
-                      {emoji}
-                    </button>
-                  ))}
+                  <button
+                    style={styles.replyBtn}
+                    onClick={() => { setReplyingTo(msg); setTimeout(() => textInputRef.current?.focus(), 0); }}
+                    title="Reply"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="9 17 4 12 9 7" />
+                      <path d="M20 18v-2a4 4 0 0 0-4-4H4" />
+                    </svg>
+                  </button>
+                  <button
+                    style={styles.deleteBtn}
+                    onClick={() => { if (window.confirm('Delete this message?')) socket.emit('deleteMessage', { messageId: msg._id }); }}
+                    title="Delete"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="3 6 5 6 21 6" />
+                      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                      <path d="M10 11v6" />
+                      <path d="M14 11v6" />
+                      <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+                    </svg>
+                  </button>
+                  <div style={styles.emojiPicker}>
+                    {EMOJIS.map((emoji) => (
+                      <button
+                        key={emoji}
+                        style={styles.emojiBtn}
+                        onClick={() => socket.emit('reactToMessage', { messageId: msg._id, emoji, sender: user })}
+                      >
+                        {emoji}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
               {/* Avatar for other user's messages */}
@@ -416,6 +449,15 @@ export default function App() {
                   }}
                 >
                   <span style={styles.senderName}>{msg.sender}</span>
+                  {msg.replyTo && (
+                    <div style={styles.replyQuote}>
+                      <span style={styles.replyQuoteSender}>{msg.replyTo.sender}</span>
+                      <span style={styles.replyQuoteText}>
+                        {msg.replyTo.imageUrl && '📷 '}
+                        {getDisplayText(msg.replyTo) || (msg.replyTo.imageUrl ? 'Image' : '')}
+                      </span>
+                    </div>
+                  )}
                   {msg.imageUrl && (
                     <img
                       src={`${API_URL}${msg.imageUrl}`}
@@ -472,6 +514,25 @@ export default function App() {
       {/* Error */}
       {error && <div style={styles.errorBar}>{error}</div>}
 
+      {/* Reply preview */}
+      {replyingTo && (
+        <div style={styles.replyPreviewBar}>
+          <div style={styles.replyPreviewContent}>
+            <span style={styles.replyPreviewSender}>{replyingTo.sender}</span>
+            <span style={styles.replyPreviewText}>
+              {replyingTo.imageUrl && '📷 '}
+              {getDisplayText(replyingTo) || (replyingTo.imageUrl ? 'Image' : '')}
+            </span>
+          </div>
+          <button
+            style={styles.replyPreviewClose}
+            onClick={() => setReplyingTo(null)}
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Image preview */}
       {pendingImage && (
         <div style={styles.imagePreviewBar}>
@@ -503,6 +564,7 @@ export default function App() {
           📎
         </button>
         <input
+          ref={textInputRef}
           style={styles.input}
           type="text"
           value={inputText}
@@ -741,6 +803,40 @@ const styles = {
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
+  hoverActions: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 4,
+    alignSelf: 'center',
+  },
+  replyBtn: {
+    background: '#1c1c24',
+    border: '1px solid #2a2a36',
+    borderRadius: '50%',
+    width: 32,
+    height: 32,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    cursor: 'pointer',
+    color: '#888',
+    boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
+    flexShrink: 0,
+  },
+  deleteBtn: {
+    background: '#1c1c24',
+    border: '1px solid #2a2a36',
+    borderRadius: '50%',
+    width: 32,
+    height: 32,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    cursor: 'pointer',
+    color: '#ef4444',
+    boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
+    flexShrink: 0,
+  },
   emojiPicker: {
     display: 'flex',
     alignItems: 'center',
@@ -915,5 +1011,70 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+
+  // Reply quote inside message bubble
+  replyQuote: {
+    background: 'rgba(0,0,0,0.2)',
+    borderLeft: '3px solid rgba(255,255,255,0.3)',
+    borderRadius: 4,
+    padding: '4px 8px',
+    marginBottom: 2,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 1,
+    cursor: 'pointer',
+  },
+  replyQuoteSender: {
+    fontSize: 11,
+    fontWeight: 700,
+    opacity: 0.7,
+  },
+  replyQuoteText: {
+    fontSize: 12,
+    opacity: 0.7,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    maxWidth: 250,
+  },
+
+  // Reply preview bar above input
+  replyPreviewBar: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: '8px 16px',
+    background: '#1c1c24',
+    borderTop: '1px solid #2a2a36',
+    borderLeft: '3px solid #1a56db',
+  },
+  replyPreviewContent: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 2,
+    overflow: 'hidden',
+    flex: 1,
+  },
+  replyPreviewSender: {
+    fontSize: 12,
+    fontWeight: 700,
+    color: '#1a56db',
+  },
+  replyPreviewText: {
+    fontSize: 13,
+    color: '#888',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  replyPreviewClose: {
+    background: 'none',
+    border: 'none',
+    color: '#888',
+    fontSize: 16,
+    cursor: 'pointer',
+    padding: '4px 8px',
+    flexShrink: 0,
   },
 };
